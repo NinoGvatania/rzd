@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Check, X, AlertTriangle, ChevronRight, ChevronLeft, Trash2, Download, Ruler, Home, ClipboardCheck, Upload, Sparkles, Loader2, Eye, Lightbulb, RotateCcw, FileCheck, Pencil, Save, Plus, MessageSquare } from 'lucide-react';
+import { storage } from './lib/storage';
 
 // Брендовые цвета РЖД (inline-style, т.к. Tailwind в артефактах не компилит arbitrary values)
 const C = { grey: '#394A58', greyDark: '#2a3943', greyDarker: '#1e2830', red: '#CD202C', redHover: '#b31b26', black: '#111827' };
@@ -160,17 +161,10 @@ FSRailway Book — прямой гротеск без засечек. Англи
 Если на фото НЕ указатель РЖД: is_rzd_sign=false, category="other".
 Если указатель ЕСТЬ но это НЕ пассажирская навигация (например, жёлтый предупреждающий знак с номером тоннеля): is_rzd_sign=true, category="functional"/"service", все rules ставь "pass" с пояснением "правило неприменимо — указатель не относится к ЕНС".`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Image } },
-        { type: 'text', text: prompt }
-      ]}]
-    })
+    body: JSON.stringify({ base64Image, mediaType, prompt })
   });
   if (!res.ok) throw new Error('API error ' + res.status);
   const data = await res.json();
@@ -190,15 +184,15 @@ function getChecks(audit) {
 // Хранилище
 async function loadAudits() {
   try {
-    const res = await window.storage.list('audit:');
+    const res = await storage.list('audit:');
     if (!res?.keys?.length) return [];
     const items = [];
-    for (const k of res.keys) { try { const r = await window.storage.get(k); if (r?.value) items.push(JSON.parse(r.value)); } catch {} }
+    for (const k of res.keys) { try { const r = await storage.get(k); if (r?.value) items.push(JSON.parse(r.value)); } catch {} }
     return items.sort((a, b) => b.createdAt - a.createdAt);
   } catch { return []; }
 }
-async function saveAudit(a) { try { await window.storage.set(`audit:${a.id}`, JSON.stringify(a)); } catch {} }
-async function deleteAudit(id) { try { await window.storage.delete(`audit:${id}`); } catch {} }
+async function saveAudit(a) { try { await storage.set(`audit:${a.id}`, JSON.stringify(a)); } catch {} }
+async function deleteAudit(id) { try { await storage.delete(`audit:${id}`); } catch {} }
 
 // ─────────────────────────────────────────────────────────
 // UI ПРИМИТИВЫ
