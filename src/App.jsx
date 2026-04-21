@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Check, X, AlertTriangle, ChevronRight, ChevronLeft, Trash2, Download, Ruler, Home, ClipboardCheck, Upload, Sparkles, Loader2, Eye, Lightbulb, RotateCcw, FileCheck, Pencil, Save, Plus, MessageSquare } from 'lucide-react';
-import { storage } from './lib/storage';
+import { listAudits, saveAudit, deleteAuditById } from './lib/audits';
+import { supabase } from './lib/supabase';
+import AuthScreen from './components/AuthScreen';
 
 // Брендовые цвета РЖД (inline-style, т.к. Tailwind в артефактах не компилит arbitrary values)
 const C = { grey: '#394A58', greyDark: '#2a3943', greyDarker: '#1e2830', red: '#CD202C', redHover: '#b31b26', black: '#111827' };
@@ -181,18 +183,9 @@ function getChecks(audit) {
   });
 }
 
-// Хранилище
-async function loadAudits() {
-  try {
-    const res = await storage.list('audit:');
-    if (!res?.keys?.length) return [];
-    const items = [];
-    for (const k of res.keys) { try { const r = await storage.get(k); if (r?.value) items.push(JSON.parse(r.value)); } catch {} }
-    return items.sort((a, b) => b.createdAt - a.createdAt);
-  } catch { return []; }
-}
-async function saveAudit(a) { try { await storage.set(`audit:${a.id}`, JSON.stringify(a)); } catch {} }
-async function deleteAudit(id) { try { await storage.delete(`audit:${id}`); } catch {} }
+// Хранилище (Supabase) — реэкспорт для совместимости с остальным кодом
+const loadAudits = listAudits;
+const deleteAudit = deleteAuditById;
 
 // ─────────────────────────────────────────────────────────
 // UI ПРИМИТИВЫ
@@ -230,16 +223,19 @@ const BottomBar = ({ children }) => (
 // ─────────────────────────────────────────────────────────
 // ГЛАВНЫЙ ЭКРАН
 // ─────────────────────────────────────────────────────────
-function ScreenHome({ onNew, onJournal, auditCount, stats }) {
+function ScreenHome({ onNew, onJournal, auditCount, stats, onSignOut }) {
   return (
     <div className="min-h-screen bg-stone-100">
       <div className="max-w-xl mx-auto px-5 py-6">
         <div className="flex items-center gap-3 mb-8">
           <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg" style={{ backgroundColor: C.red, fontFamily: 'Archivo, sans-serif' }}>Р</div>
-          <div>
+          <div className="flex-1">
             <div className="text-xs font-mono text-stone-500 tracking-widest">НАВИГАЦИЯ · АУДИТ</div>
             <div className="text-lg font-bold text-stone-900" style={{ fontFamily: 'Archivo, sans-serif' }}>Инспектор ЕНС</div>
           </div>
+          {onSignOut && (
+            <button onClick={onSignOut} className="text-xs font-mono text-stone-500 hover:text-stone-900 tracking-widest px-3 py-2 rounded-lg hover:bg-stone-200 transition">ВЫЙТИ</button>
+          )}
         </div>
         <div className="relative overflow-hidden rounded-3xl p-6 mb-5 text-white shadow-xl" style={{ background: `linear-gradient(135deg, ${C.greyDark} 0%, ${C.grey} 50%, ${C.greyDarker} 100%)` }}>
           <div className="absolute top-0 right-0 w-48 h-48 rounded-full blur-3xl opacity-40 -translate-y-8 translate-x-8" style={{ backgroundColor: C.red }}></div>
@@ -696,6 +692,32 @@ function ScreenJournal({ onBack, audits, onOpen, onDelete, onExport }) {
 // APP
 // ─────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.grey }}>
+        <Loader2 className="w-8 h-8 animate-spin text-white" />
+      </div>
+    );
+  }
+
+  if (!session) return <AuthScreen />;
+
+  return <AuditApp key={session.user.id} onSignOut={() => supabase.auth.signOut()} />;
+}
+
+function AuditApp({ onSignOut }) {
   const [screen, setScreen] = useState('home');
   const [audits, setAudits] = useState([]);
   const [currentAudit, setCurrentAudit] = useState(null);
@@ -756,7 +778,7 @@ export default function App() {
     link.click(); URL.revokeObjectURL(url);
   };
 
-  if (screen === 'home') return <ScreenHome onNew={() => setScreen('analyze')} onJournal={() => setScreen('journal')} auditCount={audits.length} stats={stats} />;
+  if (screen === 'home') return <ScreenHome onNew={() => setScreen('analyze')} onJournal={() => setScreen('journal')} auditCount={audits.length} stats={stats} onSignOut={onSignOut} />;
   if (screen === 'analyze') return <ScreenAnalyze onBack={() => setScreen('home')} onDone={finishAnalyze} />;
   if (screen === 'result') return <ScreenResult audit={currentAudit} onHome={() => setScreen('home')} onNew={() => setScreen('analyze')} onUpdate={handleUpdate} />;
   if (screen === 'journal') return <ScreenJournal onBack={() => setScreen('home')} audits={audits} onOpen={a => { setCurrentAudit(a); setScreen('result'); }} onDelete={handleDelete} onExport={handleExport} />;
