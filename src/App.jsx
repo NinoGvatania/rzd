@@ -737,6 +737,7 @@ function ScreenJournal({ onBack, audits, onOpen, onDelete, onExport }) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [profileError, setProfileError] = useState(null);
   const [stations, setStations] = useState([]);
   const [phase, setPhase] = useState('booting'); // booting | auth | loading | ready | blocked
 
@@ -748,7 +749,7 @@ export default function App() {
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
       setPhase(s ? 'loading' : 'auth');
-      if (!s) setProfile(null);
+      if (!s) { setProfile(null); setProfileError(null); }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -757,6 +758,7 @@ export default function App() {
     if (!session) return;
     let cancelled = false;
     (async () => {
+      setProfileError(null);
       let p = await loadProfile();
       if (!p) {
         const pending = JSON.parse(localStorage.getItem('pending_profile') || 'null');
@@ -769,6 +771,7 @@ export default function App() {
           localStorage.removeItem('pending_profile');
         } catch (err) {
           console.error('createProfile failed', err);
+          if (!cancelled) setProfileError(err?.message || String(err));
         }
         p = await loadProfile();
       }
@@ -777,7 +780,7 @@ export default function App() {
       if (cancelled) return;
       setStations(ss);
       setProfile(p);
-      setPhase(p?.blocked ? 'blocked' : 'ready');
+      setPhase(p ? (p.blocked ? 'blocked' : 'ready') : 'ready');
     })();
     return () => { cancelled = true; };
   }, [session?.user?.id]);
@@ -807,7 +810,24 @@ export default function App() {
     );
   }
 
-  if (!profile) return null;
+  if (!profile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-5" style={{ backgroundColor: C.grey }}>
+        <div className="bg-white rounded-3xl p-6 max-w-md text-center shadow-2xl">
+          <AlertTriangle size={32} className="mx-auto mb-3" style={{ color: C.red }} />
+          <div className="text-lg font-bold text-stone-900 mb-1" style={{ fontFamily: 'Archivo, sans-serif' }}>Профиль не загружен</div>
+          <div className="text-sm text-stone-600 mb-3">
+            Скорее всего, SQL-миграция ещё не применена в Supabase: таблицы <code>profiles</code> / <code>stations</code> не существует или RLS-политики не настроены.
+          </div>
+          {profileError && (
+            <pre className="text-xs text-left rounded-lg bg-stone-100 p-2 mb-3 overflow-x-auto" style={{ color: C.red }}>{profileError}</pre>
+          )}
+          <div className="text-xs text-stone-500 mb-3">Запусти содержимое файла <code>supabase/schema.sql</code> в Supabase → SQL Editor, затем перелогинься.</div>
+          <button onClick={onSignOut} className="text-sm font-mono text-stone-700 tracking-widest px-3 py-2 rounded-lg bg-stone-100 hover:bg-stone-200">ВЫЙТИ</button>
+        </div>
+      </div>
+    );
+  }
 
   if (profile.role === 'manager') {
     return <ManagerApp key={profile.id} profile={profile} stations={stations} onSignOut={onSignOut} />;
