@@ -84,11 +84,12 @@ alter table public.stations      enable row level security;
 alter table public.profiles      enable row level security;
 alter table public.admin_actions enable row level security;
 
--- Stations: читают все авторизованные, пишут только админы.
+-- Stations: читают все (включая анонимных — на форме регистрации
+-- руководителя нужно показать дропдаун вокзалов до логина), пишут только админы.
 drop policy if exists stations_read         on public.stations;
 drop policy if exists stations_admin_write  on public.stations;
 create policy stations_read on public.stations
-  for select to authenticated using (true);
+  for select to anon, authenticated using (true);
 create policy stations_admin_write on public.stations
   for all to authenticated using (public.is_admin()) with check (public.is_admin());
 
