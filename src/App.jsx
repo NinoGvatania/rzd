@@ -2,33 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Check, X, AlertTriangle, ChevronRight, ChevronLeft, Trash2, Download, Ruler, Home, ClipboardCheck, Upload, Sparkles, Loader2, Eye, Lightbulb, RotateCcw, FileCheck, Pencil, Save, Plus, MessageSquare } from 'lucide-react';
 import { listAudits, saveAudit, deleteAuditById } from './lib/audits';
 import { supabase } from './lib/supabase';
+import { loadProfile, createProfile } from './lib/profile';
+import { listStations } from './lib/stations';
 import AuthScreen from './components/AuthScreen';
+import MapPicker from './components/MapPicker';
+import ManagerApp from './components/manager/ManagerApp';
+import AdminApp from './components/admin/AdminApp';
+
+import { DISTANCES, PARAMETERS, RULE_META, ZONES, getChecks, isOutOfScope } from './lib/audit-rules';
+export { ZONE_LABELS } from './lib/audit-rules';
 
 // Брендовые цвета РЖД (inline-style, т.к. Tailwind в артефактах не компилит arbitrary values)
 const C = { grey: '#394A58', greyDark: '#2a3943', greyDarker: '#1e2830', red: '#CD202C', redHover: '#b31b26', black: '#111827' };
-
-const DISTANCES = [
-  { id: '<10', label: 'до 10 м', minX: 36 },
-  { id: '10-15', label: '10–15 м', minX: 48 },
-  { id: '15-20', label: '15–20 м', minX: 48 },
-  { id: '>20', label: 'более 20 м', minX: 64 }
-];
-const PARAMETERS = {
-  1: { label: 'П1', title: 'Визуальные стандарты', color: '#6366F1', bg: '#EEF2FF' },
-  2: { label: 'П2', title: 'Пространственная логика', color: '#0891B2', bg: '#ECFEFF' },
-  3: { label: 'П3', title: 'Семантическая достаточность', color: '#8B5CF6', bg: '#F5F3FF' },
-  4: { label: 'П4', title: 'Доступность', color: '#059669', bg: '#ECFDF5' },
-  5: { label: 'П5', title: 'Актуальность', color: '#EA580C', bg: '#FFF7ED' }
-};
-const RULE_META = {
-  bilingual: { title: 'Двуязычность', page: 14, param: 1 },
-  color_palette: { title: 'Цветовая палитра', page: 13, param: 1 },
-  fields_layout: { title: 'Структура и пропорции полей', page: 17, param: 1 },
-  info_priority: { title: 'Приоритет информации', page: 7, param: 3 },
-  sign_typology: { title: 'Типология указателя', page: 9, param: 3 },
-  typography: { title: 'Гарнитура FSRailway Book', page: 14, param: 1 },
-  font_size_adequacy: { title: 'Размер шрифта для дистанции', page: 8, param: 2 }
-};
 
 // ─────────────────────────────────────────────────────────
 // AI-АНАЛИЗ с улучшенным промптом
@@ -175,14 +160,6 @@ FSRailway Book — прямой гротеск без засечек. Англи
   return JSON.parse(clean);
 }
 
-function getChecks(audit) {
-  const rules = audit.ai?.rules || {};
-  return Object.entries(RULE_META).map(([key, meta]) => {
-    const r = rules[key];
-    return { key, status: r?.status || 'pass', rule: meta.title, detail: r?.reasoning || 'Нет данных', page: meta.page, param: meta.param };
-  });
-}
-
 // Хранилище (Supabase) — реэкспорт для совместимости с остальным кодом
 const loadAudits = listAudits;
 const deleteAudit = deleteAuditById;
@@ -281,13 +258,21 @@ function ScreenHome({ onNew, onJournal, auditCount, stats, onSignOut }) {
 // ─────────────────────────────────────────────────────────
 // ЭКРАН АНАЛИЗА
 // ─────────────────────────────────────────────────────────
-function ScreenAnalyze({ onBack, onDone }) {
+function ScreenAnalyze({ onBack, onDone, stations = [] }) {
   const [photo, setPhoto] = useState(null);
   const [photoMediaType, setPhotoMediaType] = useState('image/jpeg');
+  const [stationId, setStationId] = useState('');
+  const [zone, setZone] = useState(null);
+  const [location, setLocation] = useState(null);
   const [distance, setDistance] = useState(null);
   const [phase, setPhase] = useState('input');
   const [error, setError] = useState(null);
   const fileRef = useRef(null);
+
+  const selectedStation = stations.find((s) => s.id === stationId);
+  const mapCenter = selectedStation && selectedStation.latitude && selectedStation.longitude
+    ? [selectedStation.latitude, selectedStation.longitude]
+    : null;
 
   const handlePhoto = e => {
     const f = e.target.files?.[0]; if (!f) return;
@@ -297,14 +282,28 @@ function ScreenAnalyze({ onBack, onDone }) {
     r.readAsDataURL(f);
   };
 
+  const missing = [];
+  if (!photo) missing.push('фото');
+  if (!stationId) missing.push('вокзал');
+  if (!zone) missing.push('зону');
+  if (!location) missing.push('точку на карте');
+  if (!distance) missing.push('дистанцию');
+
   const analyze = async () => {
-    if (!photo || !distance) return;
+    if (missing.length) return;
     setPhase('analyzing'); setError(null);
     try {
       const base64 = photo.split(',')[1];
       const ai = await analyzeWithAI(base64, photoMediaType, distance);
       if (ai.is_rzd_sign === false) { setError('На фото не обнаружен навигационный указатель РЖД. Загрузите другое фото.'); setPhase('error'); return; }
-      const audit = { id: `a-${Date.now()}`, createdAt: Date.now(), photo, distance, ai };
+      const audit = {
+        id: `a-${Date.now()}`,
+        createdAt: Date.now(),
+        photo, distance, ai,
+        stationId,
+        zone,
+        location,
+      };
       await saveAudit(audit);
       onDone(audit);
     } catch (e) { console.error(e); setError('Не удалось проанализировать фото. Возможно, проблема с сетью.'); setPhase('error'); }
@@ -330,8 +329,52 @@ function ScreenAnalyze({ onBack, onDone }) {
           <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhoto} />
           <Btn onClick={() => fileRef.current?.click()} variant="dark" icon={Camera} className="w-full mt-3">{photo ? 'ЗАМЕНИТЬ ФОТО' : 'СДЕЛАТЬ ФОТО / ЗАГРУЗИТЬ'}</Btn>
         </div>
+
         <div className="mb-5">
-          <div className="text-xs font-mono text-stone-600 tracking-widest mb-2">ШАГ 2 · ДИСТАНЦИЯ ДО УКАЗАТЕЛЯ</div>
+          <div className="text-xs font-mono text-stone-600 tracking-widest mb-2">ШАГ 2 · ВОКЗАЛ</div>
+          <select value={stationId} onChange={(e) => { setStationId(e.target.value); setLocation(null); }}
+            className="w-full rounded-xl border-2 border-stone-300 bg-white px-3 py-3 text-stone-900 text-sm outline-none focus:border-stone-500">
+            <option value="">— выберите вокзал —</option>
+            {stations.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+          </select>
+        </div>
+
+        <div className="mb-5">
+          <div className="text-xs font-mono text-stone-600 tracking-widest mb-2">ШАГ 3 · ЗОНА РАЗМЕЩЕНИЯ</div>
+          <div className="grid grid-cols-2 gap-2">
+            {ZONES.map((z) => {
+              const active = zone === z.id;
+              return (
+                <button key={z.id} onClick={() => setZone(z.id)}
+                  className="py-3 px-3 rounded-xl border-2 text-sm font-bold text-left transition shadow-sm"
+                  style={active ? { backgroundColor: C.red, borderColor: C.red, color: 'white' } : { backgroundColor: 'white', borderColor: '#d6d3d1', color: '#1c1917' }}>
+                  {z.label}
+                  <div className="text-xs font-mono mt-0.5" style={{ color: active ? '#fecaca' : '#78716c' }}>{z.hint}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mb-5">
+          <div className="text-xs font-mono text-stone-600 tracking-widest mb-2">ШАГ 4 · ТОЧКА НА КАРТЕ</div>
+          <div className="text-xs text-stone-600 mb-2">Тапни по карте — отметится положение указателя.{!stationId && ' Сначала выбери вокзал.'}</div>
+          {stationId ? (
+            <MapPicker value={location} defaultCenter={mapCenter} onChange={setLocation} />
+          ) : (
+            <div className="rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 px-4 py-10 text-center text-sm text-stone-500">
+              Карта появится после выбора вокзала
+            </div>
+          )}
+          {location && (
+            <div className="mt-2 text-xs font-mono text-stone-500 tracking-widest">
+              {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-5">
+          <div className="text-xs font-mono text-stone-600 tracking-widest mb-2">ШАГ 5 · ДИСТАНЦИЯ ДО УКАЗАТЕЛЯ</div>
           <div className="text-xs text-stone-600 mb-3 flex items-start gap-1.5">
             <Ruler size={13} className="mt-0.5 shrink-0" />
             <span>Единственное, что нельзя определить по фото</span>
@@ -356,8 +399,8 @@ function ScreenAnalyze({ onBack, onDone }) {
       </div>
       {phase !== 'analyzing' && (
         <BottomBar>
-          <Btn onClick={analyze} disabled={!photo || !distance} variant="danger" icon={Sparkles} className="w-full" style={{ paddingTop: 16, paddingBottom: 16, fontSize: 16 }}>ПРОАНАЛИЗИРОВАТЬ</Btn>
-          {(!photo || !distance) && <div className="text-xs text-center mt-2 font-mono" style={{ color: '#94a3b8' }}>{!photo && !distance ? 'Нужны фото и дистанция' : !photo ? 'Нужно фото' : 'Укажи дистанцию'}</div>}
+          <Btn onClick={analyze} disabled={missing.length > 0} variant="danger" icon={Sparkles} className="w-full" style={{ paddingTop: 16, paddingBottom: 16, fontSize: 16 }}>ПРОАНАЛИЗИРОВАТЬ</Btn>
+          {missing.length > 0 && <div className="text-xs text-center mt-2 font-mono" style={{ color: '#94a3b8' }}>Нужно указать: {missing.join(', ')}</div>}
         </BottomBar>
       )}
     </div>
@@ -693,18 +736,55 @@ function ScreenJournal({ onBack, audits, onOpen, onDelete, onExport }) {
 // ─────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [stations, setStations] = useState([]);
+  const [phase, setPhase] = useState('booting'); // booting | auth | loading | ready | blocked
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
-      setAuthReady(true);
+      setPhase(data.session ? 'loading' : 'auth');
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      setPhase(s ? 'loading' : 'auth');
+      if (!s) setProfile(null);
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  if (!authReady) {
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      let p = await loadProfile();
+      if (!p) {
+        const pending = JSON.parse(localStorage.getItem('pending_profile') || 'null');
+        try {
+          await createProfile({
+            role: pending?.role || 'inspector',
+            stationId: pending?.stationId || null,
+            fullName: pending?.fullName || null,
+          });
+          localStorage.removeItem('pending_profile');
+        } catch (err) {
+          console.error('createProfile failed', err);
+        }
+        p = await loadProfile();
+      }
+      if (cancelled) return;
+      const ss = await listStations();
+      if (cancelled) return;
+      setStations(ss);
+      setProfile(p);
+      setPhase(p?.blocked ? 'blocked' : 'ready');
+    })();
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
+  const onSignOut = () => supabase.auth.signOut();
+
+  if (phase === 'booting' || phase === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.grey }}>
         <Loader2 className="w-8 h-8 animate-spin text-white" />
@@ -712,17 +792,39 @@ export default function App() {
     );
   }
 
-  if (!session) return <AuthScreen />;
+  if (phase === 'auth' || !session) return <AuthScreen />;
 
-  return <AuditApp key={session.user.id} onSignOut={() => supabase.auth.signOut()} />;
+  if (phase === 'blocked') {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-5" style={{ backgroundColor: C.grey }}>
+        <div className="bg-white rounded-3xl p-6 max-w-sm text-center shadow-2xl">
+          <AlertTriangle size={32} className="mx-auto mb-3" style={{ color: C.red }} />
+          <div className="text-lg font-bold text-stone-900 mb-1" style={{ fontFamily: 'Archivo, sans-serif' }}>Доступ заблокирован</div>
+          <div className="text-sm text-stone-600 mb-4">Обратитесь к администратору.</div>
+          <button onClick={onSignOut} className="text-sm font-mono text-stone-500 tracking-widest">ВЫЙТИ</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile) return null;
+
+  if (profile.role === 'manager') {
+    return <ManagerApp key={profile.id} profile={profile} stations={stations} onSignOut={onSignOut} />;
+  }
+  if (profile.role === 'admin') {
+    return <AdminApp key={profile.id} profile={profile} stations={stations} onSignOut={onSignOut} />;
+  }
+  return <InspectorApp key={profile.id} profile={profile} stations={stations} onSignOut={onSignOut} />;
 }
 
-function AuditApp({ onSignOut }) {
+function InspectorApp({ profile, stations, onSignOut }) {
   const [screen, setScreen] = useState('home');
   const [audits, setAudits] = useState([]);
   const [currentAudit, setCurrentAudit] = useState(null);
 
-  useEffect(() => { (async () => setAudits(await loadAudits()))(); }, []);
+  const loadOwn = () => loadAudits({ scope: 'own' });
+  useEffect(() => { (async () => setAudits(await loadOwn()))(); }, []);
 
   const stats = {
     total: audits.length,
@@ -739,9 +841,9 @@ function AuditApp({ onSignOut }) {
     }).length
   };
 
-  const finishAnalyze = async (audit) => { setAudits(await loadAudits()); setCurrentAudit(audit); setScreen('result'); };
-  const handleDelete = async (id) => { await deleteAudit(id); setAudits(await loadAudits()); };
-  const handleUpdate = async (updatedAudit) => { setCurrentAudit(updatedAudit); setAudits(await loadAudits()); };
+  const finishAnalyze = async (audit) => { setAudits(await loadOwn()); setCurrentAudit(audit); setScreen('result'); };
+  const handleDelete = async (id) => { await deleteAudit(id); setAudits(await loadOwn()); };
+  const handleUpdate = async (updatedAudit) => { setCurrentAudit(updatedAudit); setAudits(await loadOwn()); };
 
   const handleExport = () => {
     const lines = ['═══════════════════════════════════════════════', 'ОТЧЁТ ПО АУДИТУ НАВИГАЦИОННЫХ УКАЗАТЕЛЕЙ', 'Единая навигационная система ОАО «РЖД»', `Дата формирования: ${new Date().toLocaleString('ru-RU')}`, '═══════════════════════════════════════════════', '', `Всего проверок: ${audits.length}`, `Соответствуют требованиям: ${stats.ok}`, `С нарушениями: ${stats.fail}`, '', '─── ДЕТАЛИЗАЦИЯ ───', ''];
@@ -779,7 +881,7 @@ function AuditApp({ onSignOut }) {
   };
 
   if (screen === 'home') return <ScreenHome onNew={() => setScreen('analyze')} onJournal={() => setScreen('journal')} auditCount={audits.length} stats={stats} onSignOut={onSignOut} />;
-  if (screen === 'analyze') return <ScreenAnalyze onBack={() => setScreen('home')} onDone={finishAnalyze} />;
+  if (screen === 'analyze') return <ScreenAnalyze onBack={() => setScreen('home')} onDone={finishAnalyze} stations={stations} />;
   if (screen === 'result') return <ScreenResult audit={currentAudit} onHome={() => setScreen('home')} onNew={() => setScreen('analyze')} onUpdate={handleUpdate} />;
   if (screen === 'journal') return <ScreenJournal onBack={() => setScreen('home')} audits={audits} onOpen={a => { setCurrentAudit(a); setScreen('result'); }} onDelete={handleDelete} onExport={handleExport} />;
   return null;
