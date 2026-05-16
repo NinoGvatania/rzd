@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Loader2, Mail, Lock, LogIn, UserPlus, ShieldCheck, Building2, ClipboardList } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { listStations } from '../lib/stations';
-import { createProfile } from '../lib/profile';
 
 const C = { grey: '#394A58', greyDark: '#2a3943', greyDarker: '#1e2830', red: '#CD202C' };
 
@@ -44,22 +43,21 @@ export default function AuthScreen() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       } else {
-        const { data, error } = await supabase.auth.signUp({ email, password });
+        // Профиль (роль, вокзал, ФИО) создаётся триггером handle_new_user в БД —
+        // здесь только передаём данные через user_metadata.
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              role,
+              station_id: role === 'manager' ? (stationId || null) : null,
+              full_name: fullName || null,
+            },
+          },
+        });
         if (error) throw error;
-
-        // Если сессия сразу есть (confirm email отключён) — создаём профиль.
-        // Если confirm email включён — профиль создастся при первом входе, см. App.jsx.
-        if (data.session) {
-          try {
-            await createProfile({ role, stationId: stationId || null, fullName: fullName || null });
-          } catch (err) {
-            setError('Не удалось сохранить профиль: ' + (err?.message || err));
-            return;
-          }
-          // Кладём pending-данные в localStorage на случай если confirm email перехватит сессию.
-        } else {
-          // Сохраним выбор роли/вокзала локально — после подтверждения почты подхватим.
-          localStorage.setItem('pending_profile', JSON.stringify({ role, stationId: stationId || null, fullName: fullName || null }));
+        if (!data.session) {
           setNotice('На email отправлено письмо для подтверждения. Перейдите по ссылке и вернитесь сюда.');
         }
       }

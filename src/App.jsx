@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Check, X, AlertTriangle, ChevronRight, ChevronLeft, Trash2, Download, Ruler, Home, ClipboardCheck, Upload, Sparkles, Loader2, Eye, Lightbulb, RotateCcw, FileCheck, Pencil, Save, Plus, MessageSquare } from 'lucide-react';
 import { listAudits, saveAudit, deleteAuditById } from './lib/audits';
 import { supabase } from './lib/supabase';
-import { loadProfile, createProfile } from './lib/profile';
+import { loadProfile } from './lib/profile';
 import { listStations } from './lib/stations';
 import AuthScreen from './components/AuthScreen';
 import MapPicker from './components/MapPicker';
@@ -759,20 +759,11 @@ export default function App() {
     let cancelled = false;
     (async () => {
       setProfileError(null);
-      let p = await loadProfile();
-      if (!p) {
-        const pending = JSON.parse(localStorage.getItem('pending_profile') || 'null');
-        try {
-          await createProfile({
-            role: pending?.role || 'inspector',
-            stationId: pending?.stationId || null,
-            fullName: pending?.fullName || null,
-          });
-          localStorage.removeItem('pending_profile');
-        } catch (err) {
-          console.error('createProfile failed', err);
-          if (!cancelled) setProfileError(err?.message || String(err));
-        }
+      // Профиль создаётся триггером в БД при регистрации; ждём пару попыток
+      // на случай задержки репликации между auth.users и profiles.
+      let p = null;
+      for (let attempt = 0; attempt < 4 && !p && !cancelled; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 250 * attempt));
         p = await loadProfile();
       }
       if (cancelled) return;
@@ -780,6 +771,7 @@ export default function App() {
       if (cancelled) return;
       setStations(ss);
       setProfile(p);
+      if (!p) setProfileError('Не удалось получить профиль из таблицы profiles (триггер handle_new_user не сработал или RLS блокирует чтение).');
       setPhase(p ? (p.blocked ? 'blocked' : 'ready') : 'ready');
     })();
     return () => { cancelled = true; };
