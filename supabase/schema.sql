@@ -80,20 +80,39 @@ create or replace function public.is_admin() returns boolean
 $$ select coalesce((select role from public.profiles where id = auth.uid()) = 'admin', false) $$;
 
 -- 7a. Триггер: автосоздание profiles при регистрации в auth.users.
--- SECURITY DEFINER обходит RLS — это надёжнее, чем INSERT от клиента
--- (у клиента могут быть таймпрограммы с JWT после signUp).
+-- SECURITY DEFINER обходит RLS — надёжнее, чем INSERT от клиента
+-- (после signUp у клиента возможны таймпрограммы с JWT).
 -- Параметры берутся из options.data при signUp (role, station_id, full_name).
+-- Любая ошибка парсинга метадаты → создаётся минимальный inspector-профиль,
+-- чтобы signup не падал на 422.
 create or replace function public.handle_new_user() returns trigger
   language plpgsql security definer set search_path = public as $$
+declare
+  v_role_text    text := nullif(new.raw_user_meta_data->>'role', '');
+  v_station_text text := nullif(new.raw_user_meta_data->>'station_id', '');
+  v_name         text := nullif(new.raw_user_meta_data->>'full_name', '');
+  v_role         public.user_role;
+  v_station      uuid;
 begin
+  v_role := case
+    when v_role_text in ('inspector', 'manager', 'admin')
+      then v_role_text::public.user_role
+    else 'inspector'::public.user_role
+  end;
+
+  v_station := case
+    when v_station_text ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      then v_station_text::uuid
+    else null
+  end;
+
   insert into public.profiles (id, role, station_id, full_name)
-  values (
-    new.id,
-    coalesce(nullif(new.raw_user_meta_data->>'role', '')::public.user_role, 'inspector'),
-    nullif(new.raw_user_meta_data->>'station_id', '')::uuid,
-    nullif(new.raw_user_meta_data->>'full_name', '')
-  )
+  values (new.id, v_role, v_station, v_name)
   on conflict (id) do nothing;
+  return new;
+exception when others then
+  -- Last resort: даже если что-то выше упало — создаём пустой профиль
+  insert into public.profiles (id) values (new.id) on conflict (id) do nothing;
   return new;
 end $$;
 
