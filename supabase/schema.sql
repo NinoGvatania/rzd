@@ -79,6 +79,29 @@ create or replace function public.is_admin() returns boolean
   language sql security definer set search_path = public as
 $$ select coalesce((select role from public.profiles where id = auth.uid()) = 'admin', false) $$;
 
+-- 7a. Триггер: автосоздание profiles при регистрации в auth.users.
+-- SECURITY DEFINER обходит RLS — это надёжнее, чем INSERT от клиента
+-- (у клиента могут быть таймпрограммы с JWT после signUp).
+-- Параметры берутся из options.data при signUp (role, station_id, full_name).
+create or replace function public.handle_new_user() returns trigger
+  language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, role, station_id, full_name)
+  values (
+    new.id,
+    coalesce(nullif(new.raw_user_meta_data->>'role', '')::public.user_role, 'inspector'),
+    nullif(new.raw_user_meta_data->>'station_id', '')::uuid,
+    nullif(new.raw_user_meta_data->>'full_name', '')
+  )
+  on conflict (id) do nothing;
+  return new;
+end $$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
 -- 8. RLS включаем на новых таблицах
 alter table public.stations      enable row level security;
 alter table public.profiles      enable row level security;
