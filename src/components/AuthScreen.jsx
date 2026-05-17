@@ -44,17 +44,14 @@ export default function AuthScreen() {
         if (error) throw error;
       } else {
         // Профиль (роль, вокзал, ФИО) создаётся триггером handle_new_user в БД —
-        // здесь только передаём данные через user_metadata.
+        // передаём только непустые поля, чтобы не спровоцировать ошибки парсинга.
+        const meta = { role };
+        if (role === 'manager' && stationId) meta.station_id = stationId;
+        if (fullName) meta.full_name = fullName;
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
-          options: {
-            data: {
-              role,
-              station_id: role === 'manager' ? (stationId || null) : null,
-              full_name: fullName || null,
-            },
-          },
+          options: { data: meta },
         });
         if (error) throw error;
         if (!data.session) {
